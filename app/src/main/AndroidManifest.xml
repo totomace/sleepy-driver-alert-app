@@ -4,6 +4,8 @@
 
     <!-- Thêm quyền camera -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Khai báo: app có thể dùng camera, nhưng không bắt buộc -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application
         android:allowBackup="true"
