@@ -68,4 +68,5 @@ dependencies {
 
     //quyền cam
     implementation ("com.google.accompanist:accompanist-permissions:0.34.0")
+    implementation("com.google.mlkit:face-detection:16.1.5")
 }
