@@ -4,8 +4,6 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.*
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.navigation.compose.*
 import com.example.sleepydriverapp.ui.screen.MainScreen
 import com.example.sleepydriverapp.ui.screen.MonitorScreen
