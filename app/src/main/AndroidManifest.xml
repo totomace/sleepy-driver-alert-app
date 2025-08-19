@@ -2,10 +2,26 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Thêm quyền camera -->
+    <!-- Permissions -->
     <uses-permission android:name="android.permission.CAMERA" />
-    <!-- Khai báo: app có thể dùng camera, nhưng không bắt buộc -->
-    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" tools:node="remove" />
+
+    <!-- Camera features -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="true" />
+    <uses-feature
+        android:name="android.hardware.camera.front"
+        android:required="true" />
+    <uses-feature
+        android:name="android.hardware.camera.autofocus"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.microphone"
+        android:required="false" />
 
     <application
         android:allowBackup="true"
@@ -15,18 +31,32 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.SleepyDriverApp">
+        android:theme="@style/Theme.SleepyDriverApp"
+        tools:targetApi="31">
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
-            android:theme="@style/Theme.SleepyDriverApp">
+            android:theme="@style/Theme.SleepyDriverApp"
+            android:screenOrientation="portrait"
+            android:keepScreenOn="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Foreground Service for Drowsiness Detection -->
+        <service
+            android:name=".DrowsinessDetectionService"
+            android:foregroundServiceType="camera"
+            android:exported="false" />
+
+        <!-- Metadata for ML Kit -->
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="face" />
 
     </application>
 

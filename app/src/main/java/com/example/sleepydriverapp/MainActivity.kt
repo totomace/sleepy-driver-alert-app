@@ -1,15 +1,30 @@
 package com.example.sleepydriverapp
 
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.media.MediaPlayer
 import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.*
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,13 +35,20 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
-import androidx.compose.foundation.shape.CircleShape
+import androidx.core.content.ContextCompat
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.face.Face
+import com.google.mlkit.vision.face.FaceDetection
+import com.google.mlkit.vision.face.FaceDetectorOptions
+import kotlinx.coroutines.delay
+
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -51,7 +73,18 @@ data class AppSettings(
     val soundVolume: Float = 0.8f, // 0.0 - 1.0
     val nightMode: Boolean = false,
     val vibrationEnabled: Boolean = true,
-    val autoStart: Boolean = false
+    val autoStart: Boolean = false,
+    val alertThreshold: Long = 800L, // milliseconds - thời gian nhắm mắt tối đa
+    val soundResourceId: Int = R.raw.beep_beep_43875 // Mặc định là beep_beep_43875.mp3
+)
+
+// Data class cho trạng thái phát hiện
+data class DetectionState(
+    val faceDetected: Boolean = false,
+    val eyesOpen: Boolean = true,
+    val eyesClosed: Boolean = false,
+    val eyesClosedDuration: Long = 0L,
+    val confidenceScore: Float = 0f
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -61,41 +94,65 @@ fun SleepyDriverScreen() {
     var showHelpDialog by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var appSettings by remember { mutableStateOf(AppSettings()) }
+    var detectionState by remember { mutableStateOf(DetectionState()) }
+    var hasCameraPermission by remember { mutableStateOf(false) }
+    var showCamera by remember { mutableStateOf(false) }
+
     val context = LocalContext.current
 
-    // Lấy thông tin màn hình
+    // Check camera permission
+    LaunchedEffect(Unit) {
+        hasCameraPermission = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    // Permission launcher
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        hasCameraPermission = isGranted
+        if (isGranted) {
+            showCamera = isDetectionEnabled
+        } else {
+            Toast.makeText(context, "Cần quyền camera để hoạt động", Toast.LENGTH_LONG).show()
+            isDetectionEnabled = false
+        }
+    }
+
+    // Responsive sizes
     val configuration = LocalConfiguration.current
     val screenHeight = configuration.screenHeightDp.dp
     val screenWidth = configuration.screenWidthDp.dp
     val isSmallScreen = screenHeight < 600.dp
     val isNarrowScreen = screenWidth < 360.dp
 
-    // Responsive sizes dựa trên kích thước màn hình
     val logoSize = when {
-        isSmallScreen -> 100.dp
-        screenHeight < 700.dp -> 120.dp
-        else -> 140.dp
+        isSmallScreen -> 80.dp
+        screenHeight < 700.dp -> 100.dp
+        else -> 120.dp
     }
 
     val titleFontSize = when {
-        isNarrowScreen -> 24.sp
-        isSmallScreen -> 28.sp
-        else -> 32.sp
+        isNarrowScreen -> 20.sp
+        isSmallScreen -> 24.sp
+        else -> 28.sp
     }
 
     val headerFontSize = when {
-        isNarrowScreen -> 16.sp
-        else -> 18.sp
+        isNarrowScreen -> 14.sp
+        else -> 16.sp
     }
 
     val statusFontSize = when {
-        isSmallScreen -> 20.sp
-        else -> 24.sp
+        isSmallScreen -> 18.sp
+        else -> 22.sp
     }
 
     val toggleSize = when {
-        isSmallScreen -> Pair(140.dp, 70.dp)
-        else -> Pair(160.dp, 80.dp)
+        isSmallScreen -> Pair(120.dp, 60.dp)
+        else -> Pair(140.dp, 70.dp)
     }
 
     val horizontalPadding = when {
@@ -104,21 +161,21 @@ fun SleepyDriverScreen() {
     }
 
     val verticalSpacing = when {
-        isSmallScreen -> 0.6f
-        screenHeight < 700.dp -> 0.8f
+        isSmallScreen -> 0.5f
+        screenHeight < 700.dp -> 0.7f
         else -> 1f
     }
 
-    // Auto start khi mở app (nếu được bật)
+    // Auto start
     LaunchedEffect(appSettings.autoStart) {
-        if (appSettings.autoStart && !isDetectionEnabled) {
+        if (appSettings.autoStart && !isDetectionEnabled && hasCameraPermission) {
             isDetectionEnabled = true
+            showCamera = true
         }
     }
 
-    // --- Animation cho logo ---
+    // Logo animation
     val infiniteTransition = rememberInfiniteTransition(label = "logo_animation")
-
     val animatedScale by infiniteTransition.animateFloat(
         initialValue = 0.95f,
         targetValue = 1.1f,
@@ -139,11 +196,12 @@ fun SleepyDriverScreen() {
         label = "alpha_animation"
     )
 
-    // Hiệu ứng vòng sáng (pulse border) - tốc độ phụ thuộc vào sensitivity
-    val pulseSpeed = (2000 * (2 - appSettings.sensitivity)).toInt()
+    // Pulse border based on detection state
+    val pulseSpeed =
+        if (detectionState.eyesClosed) 800 else (2000 * (2 - appSettings.sensitivity)).toInt()
     val animatedBorder by infiniteTransition.animateFloat(
         initialValue = 0f,
-        targetValue = 15f,
+        targetValue = if (detectionState.eyesClosed) 25f else 15f,
         animationSpec = infiniteRepeatable(
             animation = tween(durationMillis = pulseSpeed, easing = LinearEasing),
             repeatMode = RepeatMode.Reverse
@@ -151,9 +209,31 @@ fun SleepyDriverScreen() {
         label = "border_animation"
     )
 
-    // Màu theme dựa trên night mode
-    val primaryColor = if (appSettings.nightMode) Color(0xFF4FC3F7) else Color(0xFFFF6B35)
+    // Theme colors
+    val primaryColor = when {
+        detectionState.eyesClosed -> Color(0xFFFF3030) // Red when eyes closed
+        !detectionState.faceDetected && isDetectionEnabled -> Color(0xFFFFA500) // Orange when no face
+        appSettings.nightMode -> Color(0xFF4FC3F7)
+        else -> Color(0xFFFF6B35)
+    }
     val backgroundColor = if (appSettings.nightMode) Color(0xFF121212) else Color(0xFFF5F5F5)
+
+    // Handle toggle detection
+    val handleToggleDetection = {
+        if (!isDetectionEnabled) {
+            if (hasCameraPermission) {
+                isDetectionEnabled = true
+                showCamera = true
+                Toast.makeText(context, "✅ Bắt đầu giám sát ngủ gật", Toast.LENGTH_SHORT).show()
+            } else {
+                permissionLauncher.launch(Manifest.permission.CAMERA)
+            }
+        } else {
+            isDetectionEnabled = false
+            showCamera = false
+            Toast.makeText(context, "⏸️ Dừng giám sát ngủ gật", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -163,7 +243,7 @@ fun SleepyDriverScreen() {
         verticalArrangement = Arrangement.spacedBy(0.dp),
         contentPadding = PaddingValues(bottom = 16.dp)
     ) {
-        // --- Header ---
+        // Header
         item {
             Row(
                 modifier = Modifier
@@ -218,7 +298,9 @@ fun SleepyDriverScreen() {
                                         .width(20.dp)
                                         .height(3.dp)
                                         .background(
-                                            if (appSettings.nightMode) Color.White else Color(0xFF666666),
+                                            if (appSettings.nightMode) Color.White else Color(
+                                                0xFF666666
+                                            ),
                                             RoundedCornerShape(1.5.dp)
                                         )
                                 )
@@ -230,12 +312,40 @@ fun SleepyDriverScreen() {
             }
         }
 
-        // Spacer item
-        item {
-            Spacer(modifier = Modifier.height((60 * verticalSpacing).dp))
+        // Camera Preview
+        if (showCamera && isDetectionEnabled) {
+            item {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Spacer(modifier = Modifier.height((20 * verticalSpacing).dp))
+
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                    ) {
+                        CameraPreview(
+                            onFaceDetection = { newState ->
+                                detectionState = newState
+                            },
+                            appSettings = appSettings,
+                            context = context
+                        )
+                    }
+                }
+            }
         }
 
-        // --- Logo chính ---
+        // Spacer
+        item {
+            Spacer(modifier = Modifier.height((30 * verticalSpacing).dp))
+        }
+
+        // Logo and status
         item {
             Column(
                 modifier = Modifier.fillMaxWidth(),
@@ -250,24 +360,38 @@ fun SleepyDriverScreen() {
                             alpha = animatedAlpha
                         }
                         .drawBehind {
-                            // Vẽ border nhấp nháy
                             drawCircle(
                                 brush = Brush.radialGradient(
-                                    colors = listOf(primaryColor.copy(alpha = 0.4f), Color.Transparent)
+                                    colors = listOf(
+                                        primaryColor.copy(alpha = 0.4f),
+                                        Color.Transparent
+                                    )
                                 ),
                                 radius = size.width / 2 + animatedBorder
                             )
                         }
                         .background(
                             brush = Brush.radialGradient(
-                                colors = if (appSettings.nightMode) {
-                                    listOf(
+                                colors = when {
+                                    detectionState.eyesClosed -> listOf(
+                                        Color(0xFFFF3030),
+                                        Color(0xFFFF6B6B),
+                                        Color(0xFFFFABAB)
+                                    )
+
+                                    !detectionState.faceDetected && isDetectionEnabled -> listOf(
+                                        Color(0xFFFFA500),
+                                        Color(0xFFFFB347),
+                                        Color(0xFFFFD700)
+                                    )
+
+                                    appSettings.nightMode -> listOf(
                                         Color(0xFF4FC3F7),
                                         Color(0xFF29B6F6),
                                         Color(0xFF03A9F4)
                                     )
-                                } else {
-                                    listOf(
+
+                                    else -> listOf(
                                         Color(0xFFFF6B35),
                                         Color(0xFFFF8E53),
                                         Color(0xFFFFA07A)
@@ -280,12 +404,17 @@ fun SleepyDriverScreen() {
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        if (appSettings.nightMode) "🌙" else "👁",
+                        when {
+                            detectionState.eyesClosed -> "⚠️"
+                            !detectionState.faceDetected && isDetectionEnabled -> "🔍"
+                            appSettings.nightMode -> "🌙"
+                            else -> "👁"
+                        },
                         fontSize = (logoSize.value * 0.35f).sp
                     )
                 }
 
-                Spacer(modifier = Modifier.height((24 * verticalSpacing).dp))
+                Spacer(modifier = Modifier.height((16 * verticalSpacing).dp))
 
                 Text(
                     text = "SLEEP ALERT",
@@ -299,12 +428,74 @@ fun SleepyDriverScreen() {
             }
         }
 
-        // Spacer item
-        item {
-            Spacer(modifier = Modifier.height((80 * verticalSpacing).dp))
+        // Status info
+        if (isDetectionEnabled) {
+            item {
+                Spacer(modifier = Modifier.height((16 * verticalSpacing).dp))
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = when {
+                            detectionState.eyesClosed -> Color(0xFFFFEBEE)
+                            !detectionState.faceDetected -> Color(0xFFFFF3E0)
+                            else -> if (appSettings.nightMode) Color(0xFF1E1E1E) else Color(
+                                0xFFE8F5E8
+                            )
+                        }
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        val statusText = when {
+                            detectionState.eyesClosed -> "⚠️ CẢNH BÁO: Đang ngủ gật!"
+                            !detectionState.faceDetected -> "🔍 Không phát hiện khuôn mặt"
+                            else -> "✅ Đang giám sát bình thường"
+                        }
+
+                        val statusColor = when {
+                            detectionState.eyesClosed -> Color(0xFFD32F2F)
+                            !detectionState.faceDetected -> Color(0xFFFF8F00)
+                            else -> Color(0xFF2E7D32)
+                        }
+
+                        Text(
+                            text = statusText,
+                            fontSize = if (isSmallScreen) 14.sp else 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = statusColor
+                        )
+
+                        if (detectionState.faceDetected) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Độ tin cậy: ${(detectionState.confidenceScore * 100).toInt()}%",
+                                fontSize = if (isSmallScreen) 12.sp else 14.sp,
+                                color = if (appSettings.nightMode) Color(0xFFCCCCCC) else Color(
+                                    0xFF666666
+                                )
+                            )
+
+                            if (detectionState.eyesClosedDuration > 0) {
+                                Text(
+                                    text = "Thời gian nhắm mắt: ${detectionState.eyesClosedDuration}ms",
+                                    fontSize = if (isSmallScreen) 12.sp else 14.sp,
+                                    color = if (detectionState.eyesClosedDuration > appSettings.alertThreshold)
+                                        Color(0xFFD32F2F) else Color(0xFF666666)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
 
-// --- Toggle Switch ---
+        // Spacer
+        item {
+            Spacer(modifier = Modifier.height((40 * verticalSpacing).dp))
+        }
+
+        // Toggle Switch
         item {
             Column(
                 modifier = Modifier.fillMaxWidth(),
@@ -312,7 +503,7 @@ fun SleepyDriverScreen() {
             ) {
                 val knobOffset by animateDpAsState(
                     targetValue = if (isDetectionEnabled) toggleSize.first - toggleSize.second else 0.dp,
-                    animationSpec = tween(durationMillis = 400), // thời gian trượt
+                    animationSpec = tween(durationMillis = 400),
                     label = "knob_animation"
                 )
 
@@ -321,23 +512,16 @@ fun SleepyDriverScreen() {
                         .width(toggleSize.first)
                         .height(toggleSize.second)
                         .background(
-                            color = if (isDetectionEnabled) Color(0xFF4CAF50) else Color(0xFFE0E0E0),
+                            color = if (isDetectionEnabled) {
+                                if (detectionState.eyesClosed) Color(0xFFFF3030)
+                                else Color(0xFF4CAF50)
+                            } else Color(0xFFE0E0E0),
                             shape = RoundedCornerShape(toggleSize.second / 2)
                         )
                         .clickable(
                             indication = null,
                             interactionSource = remember { MutableInteractionSource() }
-                        ) {
-                            isDetectionEnabled = !isDetectionEnabled
-                            val message = if (isDetectionEnabled)
-                                "✅ Bắt đầu giám sát ngủ gật"
-                            else
-                                "⏸️ Dừng giám sát ngủ gật"
-
-                            if (appSettings.soundEnabled) {
-                                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-                            }
-                        }
+                        ) { handleToggleDetection() }
                         .padding(6.dp),
                     contentAlignment = Alignment.CenterStart
                 ) {
@@ -349,23 +533,25 @@ fun SleepyDriverScreen() {
                     )
                 }
 
-                Spacer(modifier = Modifier.height((24 * verticalSpacing).dp))
+                Spacer(modifier = Modifier.height((16 * verticalSpacing).dp))
 
                 Text(
                     text = if (isDetectionEnabled) "Đang giám sát" else "Tạm dừng",
                     fontSize = statusFontSize,
                     fontWeight = FontWeight.Medium,
-                    color = if (isDetectionEnabled) Color(0xFF4CAF50) else
-                        if (appSettings.nightMode) Color.White else Color(0xFF666666)
+                    color = if (isDetectionEnabled) {
+                        if (detectionState.eyesClosed) Color(0xFFFF3030)
+                        else Color(0xFF4CAF50)
+                    } else if (appSettings.nightMode) Color.White else Color(0xFF666666)
                 )
 
                 Spacer(modifier = Modifier.height((8 * verticalSpacing).dp))
 
                 Text(
-                    text = if (isDetectionEnabled)
-                        "Ứng dụng đang theo dõi dấu hiệu ngủ gật của bạn\nĐộ nhạy: ${(appSettings.sensitivity * 100).toInt()}%"
-                    else
-                        "Bật chế độ giám sát để bắt đầu",
+                    text = if (isDetectionEnabled) {
+                        if (!hasCameraPermission) "Cần quyền truy cập camera"
+                        else "AI đang phân tích khuôn mặt và mắt\nĐộ nhạy: ${(appSettings.sensitivity * 100).toInt()}%"
+                    } else "Bật chế độ giám sát để bắt đầu",
                     fontSize = if (isSmallScreen) 12.sp else 14.sp,
                     color = if (appSettings.nightMode) Color(0xFFBBBBBB) else Color(0xFF888888),
                     textAlign = TextAlign.Center,
@@ -375,20 +561,17 @@ fun SleepyDriverScreen() {
             }
         }
 
-        // Spacer item
-        item {
-            Spacer(modifier = Modifier.height((40 * verticalSpacing).dp))
-        }
-
-        // --- Safety Card ---
+        // Safety Card
         if (isDetectionEnabled) {
             item {
+                Spacer(modifier = Modifier.height((20 * verticalSpacing).dp))
+
                 Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = (32 * verticalSpacing).dp),
+                    modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
-                        containerColor = if (appSettings.nightMode) Color(0xFF1E1E1E) else Color(0xFFE3F2FD)
+                        containerColor = if (appSettings.nightMode) Color(0xFF1E1E1E) else Color(
+                            0xFFE3F2FD
+                        )
                     ),
                     shape = RoundedCornerShape(12.dp),
                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -401,14 +584,18 @@ fun SleepyDriverScreen() {
                                 text = "Lưu ý an toàn",
                                 fontSize = if (isSmallScreen) 14.sp else 16.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = if (appSettings.nightMode) Color(0xFF4FC3F7) else Color(0xFF1976D2)
+                                color = if (appSettings.nightMode) Color(0xFF4FC3F7) else Color(
+                                    0xFF1976D2
+                                )
                             )
                         }
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "• Giữ điện thoại ở vị trí ổn định\n• Đảm bảo có đủ ánh sáng\n• Không che khuất camera trước\n• Dừng xe ngay nếu cảm thấy buồn ngủ",
+                            text = "• Giữ điện thoại ổn định, camera hướng về mặt\n• Đảm bảo ánh sáng đủ để camera hoạt động\n• Không che khuất camera trước\n• Dừng xe ngay khi có cảnh báo ngủ gật",
                             fontSize = if (isSmallScreen) 11.sp else 13.sp,
-                            color = if (appSettings.nightMode) Color(0xFFCCCCCC) else Color(0xFF424242),
+                            color = if (appSettings.nightMode) Color(0xFFCCCCCC) else Color(
+                                0xFF424242
+                            ),
                             lineHeight = if (isSmallScreen) 14.sp else 18.sp
                         )
                     }
@@ -417,23 +604,20 @@ fun SleepyDriverScreen() {
         }
     }
 
-    // --- Help Dialog ---
+    // Help Dialog
     if (showHelpDialog) {
         Dialog(onDismissRequest = { showHelpDialog = false }) {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp)
-                    .heightIn(max = screenHeight * 0.8f), // Giới hạn chiều cao
+                    .heightIn(max = screenHeight * 0.8f),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = if (appSettings.nightMode) Color(0xFF1E1E1E) else Color.White
                 )
             ) {
-                Column(
-                    modifier = Modifier
-                        .padding(24.dp)
-                ) {
+                Column(modifier = Modifier.padding(24.dp)) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth()
@@ -450,13 +634,32 @@ fun SleepyDriverScreen() {
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    Column(
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        HelpItem("1️⃣", "Đặt điện thoại nhìn thấy mặt", appSettings.nightMode, isSmallScreen)
-                        HelpItem("2️⃣", "Bật chế độ giám sát", appSettings.nightMode, isSmallScreen)
-                        HelpItem("3️⃣", "Ứng dụng sẽ cảnh báo khi ngủ gật", appSettings.nightMode, isSmallScreen)
-                        HelpItem("⚠️", "Luôn ưu tiên an toàn khi lái xe", appSettings.nightMode, isSmallScreen)
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        HelpItem(
+                            "1️⃣",
+                            "Cấp quyền camera cho ứng dụng",
+                            appSettings.nightMode,
+                            isSmallScreen
+                        )
+                        HelpItem(
+                            "2️⃣",
+                            "Đặt điện thoại nhìn thấy mặt bạn",
+                            appSettings.nightMode,
+                            isSmallScreen
+                        )
+                        HelpItem("3️⃣", "Bật chế độ giám sát", appSettings.nightMode, isSmallScreen)
+                        HelpItem(
+                            "4️⃣",
+                            "AI sẽ phân tích và cảnh báo khi ngủ gật",
+                            appSettings.nightMode,
+                            isSmallScreen
+                        )
+                        HelpItem(
+                            "⚠️",
+                            "Luôn ưu tiên an toàn - dừng xe khi buồn ngủ",
+                            appSettings.nightMode,
+                            isSmallScreen
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(20.dp))
@@ -464,9 +667,7 @@ fun SleepyDriverScreen() {
                     Button(
                         onClick = { showHelpDialog = false },
                         modifier = Modifier.align(Alignment.End),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = primaryColor
-                        )
+                        colors = ButtonDefaults.buttonColors(containerColor = primaryColor)
                     ) {
                         Text(
                             text = "Đã hiểu",
@@ -480,14 +681,14 @@ fun SleepyDriverScreen() {
         }
     }
 
-    // --- Settings Dialog ---
+    // Settings Dialog
     if (showSettingsDialog) {
         Dialog(onDismissRequest = { showSettingsDialog = false }) {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp)
-                    .heightIn(max = screenHeight * 0.85f), // Giới hạn chiều cao
+                    .heightIn(max = screenHeight * 0.85f),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = if (appSettings.nightMode) Color(0xFF1E1E1E) else Color.White
@@ -529,16 +730,28 @@ fun SleepyDriverScreen() {
                         )
                     }
 
+                    // Alert Threshold
                     item {
-                        Divider(color = if (appSettings.nightMode) Color(0xFF333333) else Color(0xFFE0E0E0))
+                        SettingWithSlider(
+                            icon = "⏱️",
+                            title = "Thời gian cảnh báo (giây)",
+                            value = (appSettings.alertThreshold / 1000f) / 5f,
+                            onValueChange = {
+                                val newThreshold = (it * 5000).toLong().coerceIn(500L, 5000L)
+                                appSettings = appSettings.copy(alertThreshold = newThreshold)
+                            },
+                            valueText = String.format("%.1f s", appSettings.alertThreshold / 1000f),
+                            nightMode = appSettings.nightMode,
+                            isSmallScreen = isSmallScreen
+                        )
                     }
 
-                    // Sound Settings
+                    // Sound Enabled
                     item {
                         SettingWithToggle(
                             icon = "🔊",
                             title = "Âm thanh cảnh báo",
-                            description = "Bật/tắt âm báo khi phát hiện ngủ gật",
+                            description = "Bật/tắt âm thanh cảnh báo khi phát hiện ngủ gật",
                             checked = appSettings.soundEnabled,
                             onCheckedChange = { appSettings = appSettings.copy(soundEnabled = it) },
                             nightMode = appSettings.nightMode,
@@ -546,13 +759,38 @@ fun SleepyDriverScreen() {
                         )
                     }
 
+                    // Sound Selection
+                    if (appSettings.soundEnabled) {
+                        item {
+                            val soundOptions = listOf(
+                                Pair("Âm thanh 1", R.raw.beep_beep_43875),
+                                Pair("Âm thanh 2", R.raw.beep_warning_6387),
+                                Pair("Âm thanh 3", R.raw.censor_beep_3_372460)
+                            )
+                            SettingWithDropdown(
+                                icon = "🎵",
+                                title = "Chọn âm thanh cảnh báo",
+                                items = soundOptions,
+                                selectedItem = appSettings.soundResourceId,
+                                onItemSelected = {
+                                    appSettings = appSettings.copy(soundResourceId = it)
+                                },
+                                nightMode = appSettings.nightMode,
+                                isSmallScreen = isSmallScreen
+                            )
+                        }
+                    }
+
+                    // Sound Volume
                     if (appSettings.soundEnabled) {
                         item {
                             SettingWithSlider(
                                 icon = "🔈",
-                                title = "Âm lượng",
+                                title = "Âm lượng cảnh báo",
                                 value = appSettings.soundVolume,
-                                onValueChange = { appSettings = appSettings.copy(soundVolume = it) },
+                                onValueChange = {
+                                    appSettings = appSettings.copy(soundVolume = it)
+                                },
                                 valueText = "${(appSettings.soundVolume * 100).toInt()}%",
                                 nightMode = appSettings.nightMode,
                                 isSmallScreen = isSmallScreen
@@ -560,8 +798,32 @@ fun SleepyDriverScreen() {
                         }
                     }
 
+                    // Vibration Enabled
                     item {
-                        Divider(color = if (appSettings.nightMode) Color(0xFF333333) else Color(0xFFE0E0E0))
+                        SettingWithToggle(
+                            icon = "📳",
+                            title = "Rung cảnh báo",
+                            description = "Rung điện thoại khi phát hiện ngủ gật",
+                            checked = appSettings.vibrationEnabled,
+                            onCheckedChange = {
+                                appSettings = appSettings.copy(vibrationEnabled = it)
+                            },
+                            nightMode = appSettings.nightMode,
+                            isSmallScreen = isSmallScreen
+                        )
+                    }
+
+                    // Auto Start
+                    item {
+                        SettingWithToggle(
+                            icon = "🚀",
+                            title = "Tự động khởi động",
+                            description = "Tự động bắt đầu giám sát khi mở ứng dụng",
+                            checked = appSettings.autoStart,
+                            onCheckedChange = { appSettings = appSettings.copy(autoStart = it) },
+                            nightMode = appSettings.nightMode,
+                            isSmallScreen = isSmallScreen
+                        )
                     }
 
                     // Night Mode
@@ -577,33 +839,13 @@ fun SleepyDriverScreen() {
                         )
                     }
 
-                    // Vibration
                     item {
-                        SettingWithToggle(
-                            icon = "📳",
-                            title = "Rung cảnh báo",
-                            description = "Rung điện thoại khi phát hiện ngủ gật",
-                            checked = appSettings.vibrationEnabled,
-                            onCheckedChange = { appSettings = appSettings.copy(vibrationEnabled = it) },
-                            nightMode = appSettings.nightMode,
-                            isSmallScreen = isSmallScreen
+                        Divider(
+                            color = if (appSettings.nightMode) Color(0xFF333333) else Color(
+                                0xFFE0E0E0
+                            )
                         )
                     }
-
-                    // Auto Start
-                    item {
-                        SettingWithToggle(
-                            icon = "🚀",
-                            title = "Tự động bắt đầu",
-                            description = "Tự động giám sát khi mở ứng dụng",
-                            checked = appSettings.autoStart,
-                            onCheckedChange = { appSettings = appSettings.copy(autoStart = it) },
-                            nightMode = appSettings.nightMode,
-                            isSmallScreen = isSmallScreen
-                        )
-                    }
-
-                    item { Spacer(modifier = Modifier.height(12.dp)) }
 
                     // Buttons
                     item {
@@ -613,11 +855,14 @@ fun SleepyDriverScreen() {
                                 Arrangement.SpaceBetween else
                                 Arrangement.spacedBy(8.dp, Alignment.End)
                         ) {
-                            // Reset Button
                             OutlinedButton(
                                 onClick = {
                                     appSettings = AppSettings() // Reset về mặc định
-                                    Toast.makeText(context, "Đã reset về cài đặt mặc định", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(
+                                        context,
+                                        "Đã reset về cài đặt mặc định",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
                                 },
                                 colors = ButtonDefaults.outlinedButtonColors(
                                     contentColor = primaryColor
@@ -629,7 +874,6 @@ fun SleepyDriverScreen() {
                                 )
                             }
 
-                            // Close Button
                             Button(
                                 onClick = { showSettingsDialog = false },
                                 colors = ButtonDefaults.buttonColors(
@@ -646,6 +890,190 @@ fun SleepyDriverScreen() {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@androidx.annotation.OptIn(ExperimentalGetImage::class)
+@Composable
+fun CameraPreview(
+    onFaceDetection: (DetectionState) -> Unit,
+    appSettings: AppSettings,
+    context: Context
+) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var camera: Camera? by remember { mutableStateOf(null) }
+    var eyesClosedStartTime by remember { mutableStateOf(0L) }
+    var lastAlertTime by remember { mutableStateOf(0L) }
+
+    // Face detector configuration
+    val faceDetector = remember {
+        val options = FaceDetectorOptions.Builder()
+            .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+            .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
+            .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
+            .setMinFaceSize(0.15f)
+            .enableTracking()
+            .build()
+        FaceDetection.getClient(options)
+    }
+
+    // Custom vibration pattern
+    val vibrationPattern = longArrayOf(0, 500, 200, 500, 200, 500) // Pattern tùy chỉnh: 500ms rung, 200ms nghỉ
+
+    // Alert functions
+    fun playAlertSound() {
+        if (!appSettings.soundEnabled) return
+        try {
+            val mediaPlayer = MediaPlayer.create(context, appSettings.soundResourceId)
+            mediaPlayer?.apply {
+                setVolume(appSettings.soundVolume, appSettings.soundVolume)
+                start()
+                setOnCompletionListener { release() }
+            }
+        } catch (e: Exception) {
+            Log.e("SleepyDriver", "Lỗi khi phát âm thanh cảnh báo", e)
+        }
+    }
+
+    fun vibrate() {
+        if (!appSettings.vibrationEnabled) return
+        try {
+            val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                vibrator.vibrate(VibrationEffect.createWaveform(vibrationPattern, -1))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(vibrationPattern, -1)
+            }
+        } catch (e: Exception) {
+            Log.e("SleepyDriver", "Error vibrating", e)
+        }
+    }
+
+    AndroidView(
+        factory = { ctx ->
+            val previewView = PreviewView(ctx)
+            val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
+
+            cameraProviderFuture.addListener({
+                val cameraProvider = cameraProviderFuture.get()
+
+                val preview = Preview.Builder().build().also {
+                    it.setSurfaceProvider(previewView.surfaceProvider)
+                }
+
+                val imageAnalyzer = ImageAnalysis.Builder()
+                    .setTargetRotation(previewView.display.rotation)
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .build()
+
+                imageAnalyzer.setAnalyzer(ContextCompat.getMainExecutor(ctx)) { imageProxy ->
+                    val mediaImage = imageProxy.image
+                    if (mediaImage != null) {
+                        val image = InputImage.fromMediaImage(
+                            mediaImage,
+                            imageProxy.imageInfo.rotationDegrees
+                        )
+
+                        faceDetector.process(image)
+                            .addOnSuccessListener { faces ->
+                                val currentTime = System.currentTimeMillis()
+
+                                if (faces.isNotEmpty()) {
+                                    val face = faces[0]
+                                    val leftEyeOpenProbability = face.leftEyeOpenProbability
+                                    val rightEyeOpenProbability = face.rightEyeOpenProbability
+
+                                    val threshold = 0.5f - (appSettings.sensitivity * 0.3f)
+                                    val eyesOpen = if (leftEyeOpenProbability != null && rightEyeOpenProbability != null) {
+                                        leftEyeOpenProbability > threshold && rightEyeOpenProbability > threshold
+                                    } else true
+
+                                    val eyesClosed = !eyesOpen
+
+                                    if (eyesClosed) {
+                                        if (eyesClosedStartTime == 0L) {
+                                            eyesClosedStartTime = currentTime
+                                        }
+                                    } else {
+                                        eyesClosedStartTime = 0L
+                                    }
+
+                                    val eyesClosedDuration = if (eyesClosedStartTime > 0) {
+                                        currentTime - eyesClosedStartTime
+                                    } else 0L
+
+                                    // Anti-spam alert logic
+                                    if (eyesClosedDuration > appSettings.alertThreshold &&
+                                        currentTime - lastAlertTime > 3000) {
+                                        playAlertSound()
+                                        vibrate()
+                                        lastAlertTime = currentTime
+                                        Toast.makeText(context, "⚠️ Cảnh báo: Ngáp ngủ!", Toast.LENGTH_SHORT).show()
+                                    }
+
+                                    onFaceDetection(
+                                        DetectionState(
+                                            faceDetected = true,
+                                            eyesOpen = eyesOpen,
+                                            eyesClosed = eyesClosed,
+                                            eyesClosedDuration = eyesClosedDuration,
+                                            confidenceScore = ((leftEyeOpenProbability ?: 0f) + (rightEyeOpenProbability ?: 0f)) / 2f
+                                        )
+                                    )
+                                } else {
+                                    eyesClosedStartTime = 0L
+                                    onFaceDetection(
+                                        DetectionState(
+                                            faceDetected = false,
+                                            eyesOpen = true,
+                                            eyesClosed = false,
+                                            eyesClosedDuration = 0L,
+                                            confidenceScore = 0f
+                                        )
+                                    )
+                                }
+                            }
+                            .addOnFailureListener { e ->
+                                Log.e("SleepyDriver", "Face detection failed", e)
+                            }
+                            .addOnCompleteListener {
+                                imageProxy.close()
+                            }
+                    } else {
+                        imageProxy.close()
+                    }
+                }
+
+                val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
+
+                try {
+                    cameraProvider.unbindAll()
+                    camera = cameraProvider.bindToLifecycle(
+                        lifecycleOwner,
+                        cameraSelector,
+                        preview,
+                        imageAnalyzer
+                    )
+                } catch (exc: Exception) {
+                    Log.e("SleepyDriver", "Use case binding failed", exc)
+                }
+            }, ContextCompat.getMainExecutor(ctx))
+
+            previewView
+        },
+        modifier = Modifier.fillMaxSize()
+    )
+
+    DisposableEffect(Unit) {
+        onDispose {
+            faceDetector.close()
+            camera?.let { cam ->
+                // Cleanup camera resources
+                val cameraProvider = ProcessCameraProvider.getInstance(context).get()
+                cameraProvider.unbindAll()
             }
         }
     }
@@ -773,7 +1201,69 @@ fun SettingWithSlider(
     }
 }
 
-// --- Theme ---
+@Composable
+fun SettingWithDropdown(
+    icon: String,
+    title: String,
+    items: List<Pair<String, Int>>,
+    selectedItem: Int,
+    onItemSelected: (Int) -> Unit,
+    nightMode: Boolean = false,
+    isSmallScreen: Boolean = false
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = true }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = icon,
+                fontSize = if (isSmallScreen) 18.sp else 20.sp,
+                modifier = Modifier.width(if (isSmallScreen) 35.dp else 40.dp)
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    fontSize = if (isSmallScreen) 14.sp else 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = if (nightMode) Color.White else Color(0xFF2D2D2D)
+                )
+                Text(
+                    text = items.find { it.second == selectedItem }?.first ?: "Chọn âm thanh",
+                    fontSize = if (isSmallScreen) 12.sp else 14.sp,
+                    color = if (nightMode) Color(0xFF999999) else Color(0xFF666666)
+                )
+            }
+            Box {
+                Icon(
+                    imageVector = Icons.Default.ArrowDropDown,
+                    contentDescription = "Chọn âm thanh",
+                    tint = if (nightMode) Color.White else Color(0xFF2D2D2D)
+                )
+                DropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false }
+                ) {
+                    items.forEach { item ->
+                        DropdownMenuItem(
+                            text = { Text(item.first) },
+                            onClick = {
+                                onItemSelected(item.second)
+                                expanded = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun SleepyDriverTheme(content: @Composable () -> Unit) {
     MaterialTheme(
