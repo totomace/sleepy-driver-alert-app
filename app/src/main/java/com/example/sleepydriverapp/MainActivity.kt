@@ -41,13 +41,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.Face
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
 import kotlinx.coroutines.delay
+import androidx.compose.ui.window.Dialog
+import kotlinx.coroutines.launch
 
 
 class MainActivity : ComponentActivity() {
@@ -98,6 +99,10 @@ fun SleepyDriverScreen() {
     var hasCameraPermission by remember { mutableStateOf(false) }
     var showCamera by remember { mutableStateOf(false) }
 
+    // THÊM: Biến để kiểm soát delay và trạng thái chuyển đổi
+    var isToggling by remember { mutableStateOf(false) }
+    var cameraInitialized by remember { mutableStateOf(false) }
+
     val context = LocalContext.current
 
     // Check camera permission
@@ -108,16 +113,34 @@ fun SleepyDriverScreen() {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
-    // Permission launcher
+    // Permission launcher với delay đồng bộ
+    val coroutineScope = rememberCoroutineScope()
+
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         hasCameraPermission = isGranted
+
         if (isGranted) {
-            showCamera = isDetectionEnabled
+            if (isDetectionEnabled) {
+                coroutineScope.launch {
+                    delay(450L) // Delay đồng bộ với animation toggle
+                    showCamera = true
+                    delay(100L) // Thêm 100ms cho camera khởi tạo
+                    cameraInitialized = true
+                    isToggling = false
+                    Toast.makeText(context, "✅ Bắt đầu giám sát ngủ gật", Toast.LENGTH_SHORT).show()
+                }
+            }
         } else {
             Toast.makeText(context, "Cần quyền camera để hoạt động", Toast.LENGTH_LONG).show()
-            isDetectionEnabled = false
+            coroutineScope.launch {
+                delay(100L)
+                isDetectionEnabled = false
+                showCamera = false
+                cameraInitialized = false
+                isToggling = false
+            }
         }
     }
 
@@ -166,11 +189,16 @@ fun SleepyDriverScreen() {
         else -> 1f
     }
 
-    // Auto start
+    // Auto start với delay đồng bộ
     LaunchedEffect(appSettings.autoStart) {
-        if (appSettings.autoStart && !isDetectionEnabled && hasCameraPermission) {
+        if (appSettings.autoStart && !isDetectionEnabled && hasCameraPermission && !isToggling) {
+            isToggling = true
             isDetectionEnabled = true
+            delay(450L) // Đồng bộ với animation
             showCamera = true
+            delay(100L) // Camera khởi tạo
+            cameraInitialized = true
+            isToggling = false
         }
     }
 
@@ -218,22 +246,58 @@ fun SleepyDriverScreen() {
     }
     val backgroundColor = if (appSettings.nightMode) Color(0xFF121212) else Color(0xFFF5F5F5)
 
-    // Handle toggle detection
+    // State trigger để điều khiển delay
+    var startMonitoringTrigger by remember { mutableStateOf(false) }
+    var stopMonitoringTrigger by remember { mutableStateOf(false) }
+
+// Hàm xử lý toggle detection
     val handleToggleDetection = {
-        if (!isDetectionEnabled) {
-            if (hasCameraPermission) {
-                isDetectionEnabled = true
-                showCamera = true
-                Toast.makeText(context, "✅ Bắt đầu giám sát ngủ gật", Toast.LENGTH_SHORT).show()
+        if (!isToggling) {
+            isToggling = true
+            if (!isDetectionEnabled) {
+                // Bật giám sát
+                if (hasCameraPermission) {
+                    isDetectionEnabled = true
+                    startMonitoringTrigger = true // Kích hoạt trigger để bật camera sau animation
+                } else {
+                    permissionLauncher.launch(Manifest.permission.CAMERA)
+                }
             } else {
-                permissionLauncher.launch(Manifest.permission.CAMERA)
+                // Tắt giám sát
+                isDetectionEnabled = false
+                stopMonitoringTrigger = true // Kích hoạt trigger để tắt camera sau animation
             }
-        } else {
-            isDetectionEnabled = false
-            showCamera = false
-            Toast.makeText(context, "⏸️ Dừng giám sát ngủ gật", Toast.LENGTH_SHORT).show()
         }
     }
+
+// LaunchedEffect xử lý bật
+    LaunchedEffect(startMonitoringTrigger) {
+        if (startMonitoringTrigger) {
+            delay(400L) // Chờ animation hoàn tất (400ms)
+            if (hasCameraPermission) {
+                showCamera = true
+                delay(100L) // Thêm delay nhỏ để đảm bảo camera khởi tạo
+                cameraInitialized = true
+                Toast.makeText(context, "✅ Bắt đầu giám sát ngủ gật", Toast.LENGTH_SHORT).show()
+            }
+            isToggling = false
+            startMonitoringTrigger = false // Reset trigger
+        }
+    }
+
+// LaunchedEffect xử lý tắt
+    LaunchedEffect(stopMonitoringTrigger) {
+        if (stopMonitoringTrigger) {
+            delay(400L) // Chờ animation hoàn tất (400ms)
+            showCamera = false
+            cameraInitialized = false
+            detectionState = DetectionState()
+            Toast.makeText(context, "⏸️ Dừng giám sát ngủ gật", Toast.LENGTH_SHORT).show()
+            isToggling = false
+            stopMonitoringTrigger = false // Reset trigger
+        }
+    }
+
 
     LazyColumn(
         modifier = Modifier
@@ -312,8 +376,8 @@ fun SleepyDriverScreen() {
             }
         }
 
-        // Camera Preview
-        if (showCamera && isDetectionEnabled) {
+        // Camera Preview - CHỈ HIỂN THỊ KHI ĐƯỢC BẬT VÀ ĐÃ KHỞI TẠO
+        if (showCamera && isDetectionEnabled && cameraInitialized) {
             item {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
@@ -330,11 +394,57 @@ fun SleepyDriverScreen() {
                     ) {
                         CameraPreview(
                             onFaceDetection = { newState ->
-                                detectionState = newState
+                                // Chỉ cập nhật state khi camera đã khởi tạo hoàn toàn
+                                if (cameraInitialized && !isToggling) {
+                                    detectionState = newState
+                                }
                             },
                             appSettings = appSettings,
-                            context = context
+                            context = context,
+                            isEnabled = isDetectionEnabled && cameraInitialized
                         )
+                    }
+                }
+            }
+        }
+
+        // Loading indicator khi đang toggle
+        if (isToggling && isDetectionEnabled) {
+            item {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Spacer(modifier = Modifier.height((20 * verticalSpacing).dp))
+
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (appSettings.nightMode) Color(0xFF1E1E1E) else Color(0xFFF0F0F0)
+                        )
+                    ) {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                CircularProgressIndicator(
+                                    color = primaryColor,
+                                    strokeWidth = 3.dp,
+                                    modifier = Modifier.size(40.dp)
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = "Đang khởi tạo camera...",
+                                    fontSize = 14.sp,
+                                    color = if (appSettings.nightMode) Color(0xFFCCCCCC) else Color(0xFF666666)
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -405,6 +515,7 @@ fun SleepyDriverScreen() {
                 ) {
                     Text(
                         when {
+                            isToggling -> "⏳"
                             detectionState.eyesClosed -> "⚠️"
                             !detectionState.faceDetected && isDetectionEnabled -> "🔍"
                             appSettings.nightMode -> "🌙"
@@ -437,6 +548,7 @@ fun SleepyDriverScreen() {
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
                         containerColor = when {
+                            isToggling -> if (appSettings.nightMode) Color(0xFF1E1E1E) else Color(0xFFF0F0F0)
                             detectionState.eyesClosed -> Color(0xFFFFEBEE)
                             !detectionState.faceDetected -> Color(0xFFFFF3E0)
                             else -> if (appSettings.nightMode) Color(0xFF1E1E1E) else Color(
@@ -448,12 +560,15 @@ fun SleepyDriverScreen() {
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         val statusText = when {
+                            isToggling -> "⏳ Đang khởi tạo hệ thống..."
+                            !cameraInitialized -> "🔄 Đang chuẩn bị camera..."
                             detectionState.eyesClosed -> "⚠️ CẢNH BÁO: Đang ngủ gật!"
                             !detectionState.faceDetected -> "🔍 Không phát hiện khuôn mặt"
                             else -> "✅ Đang giám sát bình thường"
                         }
 
                         val statusColor = when {
+                            isToggling || !cameraInitialized -> Color(0xFFFF8F00)
                             detectionState.eyesClosed -> Color(0xFFD32F2F)
                             !detectionState.faceDetected -> Color(0xFFFF8F00)
                             else -> Color(0xFF2E7D32)
@@ -466,7 +581,7 @@ fun SleepyDriverScreen() {
                             color = statusColor
                         )
 
-                        if (detectionState.faceDetected) {
+                        if (detectionState.faceDetected && cameraInitialized && !isToggling) {
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = "Độ tin cậy: ${(detectionState.confidenceScore * 100).toInt()}%",
@@ -495,7 +610,7 @@ fun SleepyDriverScreen() {
             Spacer(modifier = Modifier.height((40 * verticalSpacing).dp))
         }
 
-        // Toggle Switch
+        // Toggle Switch với animation đồng bộ
         item {
             Column(
                 modifier = Modifier.fillMaxWidth(),
@@ -503,7 +618,7 @@ fun SleepyDriverScreen() {
             ) {
                 val knobOffset by animateDpAsState(
                     targetValue = if (isDetectionEnabled) toggleSize.first - toggleSize.second else 0.dp,
-                    animationSpec = tween(durationMillis = 400),
+                    animationSpec = tween(durationMillis = 400), // Animation 400ms
                     label = "knob_animation"
                 )
 
@@ -520,8 +635,13 @@ fun SleepyDriverScreen() {
                         )
                         .clickable(
                             indication = null,
-                            interactionSource = remember { MutableInteractionSource() }
-                        ) { handleToggleDetection() }
+                            interactionSource = remember { MutableInteractionSource() },
+                            enabled = !isToggling // Vô hiệu hóa khi đang toggle
+                        ) {
+                            if (!isToggling) {
+                                handleToggleDetection()
+                            }
+                        }
                         .padding(6.dp),
                     contentAlignment = Alignment.CenterStart
                 ) {
@@ -536,22 +656,35 @@ fun SleepyDriverScreen() {
                 Spacer(modifier = Modifier.height((16 * verticalSpacing).dp))
 
                 Text(
-                    text = if (isDetectionEnabled) "Đang giám sát" else "Tạm dừng",
+                    text = when {
+                        isToggling -> if (isDetectionEnabled) "Đang khởi động..." else "Đang dừng..."
+                        isDetectionEnabled -> "Đang giám sát"
+                        else -> "Tạm dừng"
+                    },
                     fontSize = statusFontSize,
                     fontWeight = FontWeight.Medium,
-                    color = if (isDetectionEnabled) {
-                        if (detectionState.eyesClosed) Color(0xFFFF3030)
-                        else Color(0xFF4CAF50)
-                    } else if (appSettings.nightMode) Color.White else Color(0xFF666666)
+                    color = when {
+                        isToggling -> Color(0xFFFF8F00)
+                        isDetectionEnabled -> {
+                            if (detectionState.eyesClosed) Color(0xFFFF3030)
+                            else Color(0xFF4CAF50)
+                        }
+                        else -> if (appSettings.nightMode) Color.White else Color(0xFF666666)
+                    }
                 )
 
                 Spacer(modifier = Modifier.height((8 * verticalSpacing).dp))
 
                 Text(
-                    text = if (isDetectionEnabled) {
-                        if (!hasCameraPermission) "Cần quyền truy cập camera"
-                        else "AI đang phân tích khuôn mặt và mắt\nĐộ nhạy: ${(appSettings.sensitivity * 100).toInt()}%"
-                    } else "Bật chế độ giám sát để bắt đầu",
+                    text = when {
+                        isToggling -> "Vui lòng đợi hệ thống khởi tạo..."
+                        isDetectionEnabled -> {
+                            if (!hasCameraPermission) "Cần quyền truy cập camera"
+                            else if (!cameraInitialized) "Đang chuẩn bị camera..."
+                            else "AI đang phân tích khuôn mặt và mắt\nĐộ nhạy: ${(appSettings.sensitivity * 100).toInt()}%"
+                        }
+                        else -> "Bật chế độ giám sát để bắt đầu"
+                    },
                     fontSize = if (isSmallScreen) 12.sp else 14.sp,
                     color = if (appSettings.nightMode) Color(0xFFBBBBBB) else Color(0xFF888888),
                     textAlign = TextAlign.Center,
@@ -900,12 +1033,17 @@ fun SleepyDriverScreen() {
 fun CameraPreview(
     onFaceDetection: (DetectionState) -> Unit,
     appSettings: AppSettings,
-    context: Context
+    context: Context,
+    isEnabled: Boolean // Thêm tham số để kiểm soát bật/tắt camera
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
+    var cameraProvider: ProcessCameraProvider? by remember { mutableStateOf(null) }
     var camera: Camera? by remember { mutableStateOf(null) }
     var eyesClosedStartTime by remember { mutableStateOf(0L) }
     var lastAlertTime by remember { mutableStateOf(0L) }
+
+    // THÊM: Biến để kiểm soát trạng thái camera
+    var cameraSetupInProgress by remember { mutableStateOf(false) }
 
     // Face detector configuration
     val faceDetector = remember {
@@ -920,7 +1058,7 @@ fun CameraPreview(
     }
 
     // Custom vibration pattern
-    val vibrationPattern = longArrayOf(0, 500, 200, 500, 200, 500) // Pattern tùy chỉnh: 500ms rung, 200ms nghỉ
+    val vibrationPattern = longArrayOf(0, 500, 200, 500, 200, 500)
 
     // Alert functions
     fun playAlertSound() {
@@ -952,14 +1090,22 @@ fun CameraPreview(
         }
     }
 
-    AndroidView(
-        factory = { ctx ->
-            val previewView = PreviewView(ctx)
-            val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
+    // THAY ĐỔI: setupCamera với delay và trạng thái đồng bộ
+    fun setupCamera(
+        cameraProvider: ProcessCameraProvider,
+        previewView: PreviewView?,
+        enable: Boolean
+    ) {
+        try {
+            // Đánh dấu bắt đầu setup camera
+            if (enable) {
+                cameraSetupInProgress = true
+            }
 
-            cameraProviderFuture.addListener({
-                val cameraProvider = cameraProviderFuture.get()
+            // Luôn unbind trước khi thiết lập lại
+            cameraProvider.unbindAll()
 
+            if (enable && previewView != null) {
                 val preview = Preview.Builder().build().also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
@@ -969,7 +1115,13 @@ fun CameraPreview(
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
 
-                imageAnalyzer.setAnalyzer(ContextCompat.getMainExecutor(ctx)) { imageProxy ->
+                imageAnalyzer.setAnalyzer(ContextCompat.getMainExecutor(context)) { imageProxy ->
+                    // Kiểm tra trạng thái enable và setup completion
+                    if (!enable || cameraSetupInProgress) {
+                        imageProxy.close()
+                        return@setAnalyzer
+                    }
+
                     val mediaImage = imageProxy.image
                     if (mediaImage != null) {
                         val image = InputImage.fromMediaImage(
@@ -1007,11 +1159,16 @@ fun CameraPreview(
 
                                     // Anti-spam alert logic
                                     if (eyesClosedDuration > appSettings.alertThreshold &&
-                                        currentTime - lastAlertTime > 3000) {
+                                        currentTime - lastAlertTime > 3000
+                                    ) {
                                         playAlertSound()
                                         vibrate()
                                         lastAlertTime = currentTime
-                                        Toast.makeText(context, "⚠️ Cảnh báo: Ngáp ngủ!", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(
+                                            context,
+                                            "⚠️ Cảnh báo: Ngủ gật!",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
                                     }
 
                                     onFaceDetection(
@@ -1020,7 +1177,8 @@ fun CameraPreview(
                                             eyesOpen = eyesOpen,
                                             eyesClosed = eyesClosed,
                                             eyesClosedDuration = eyesClosedDuration,
-                                            confidenceScore = ((leftEyeOpenProbability ?: 0f) + (rightEyeOpenProbability ?: 0f)) / 2f
+                                            confidenceScore = ((leftEyeOpenProbability ?: 0f) +
+                                                    (rightEyeOpenProbability ?: 0f)) / 2f
                                         )
                                     )
                                 } else {
@@ -1049,17 +1207,40 @@ fun CameraPreview(
 
                 val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
 
-                try {
-                    cameraProvider.unbindAll()
-                    camera = cameraProvider.bindToLifecycle(
-                        lifecycleOwner,
-                        cameraSelector,
-                        preview,
-                        imageAnalyzer
-                    )
-                } catch (exc: Exception) {
-                    Log.e("SleepyDriver", "Use case binding failed", exc)
+                camera = cameraProvider.bindToLifecycle(
+                    lifecycleOwner,
+                    cameraSelector,
+                    preview,
+                    imageAnalyzer
+                )
+
+                // THÊM: Delay để đánh dấu camera đã setup xong
+                if (enable) {
+                    // Sử dụng coroutine scope để delay
+                    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+                        delay(200L) // Delay 200ms để camera ổn định
+                        cameraSetupInProgress = false
+                    }
                 }
+
+            } else {
+                cameraSetupInProgress = false
+            }
+        } catch (exc: Exception) {
+            Log.e("SleepyDriver", "Use case binding failed", exc)
+            cameraSetupInProgress = false
+        }
+    }
+
+    // View hiển thị camera
+    AndroidView(
+        factory = { ctx ->
+            val previewView = PreviewView(ctx)
+            val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
+
+            cameraProviderFuture.addListener({
+                cameraProvider = cameraProviderFuture.get()
+                setupCamera(cameraProvider!!, previewView, isEnabled)
             }, ContextCompat.getMainExecutor(ctx))
 
             previewView
@@ -1067,14 +1248,24 @@ fun CameraPreview(
         modifier = Modifier.fillMaxSize()
     )
 
+    // THAY ĐỔI: Xử lý khi trạng thái isEnabled thay đổi với delay
+    LaunchedEffect(isEnabled) {
+        if (cameraProvider != null) {
+            if (!isEnabled) {
+                // Tắt camera ngay lập tức
+                setupCamera(cameraProvider!!, null, false)
+            } else {
+                // Bật camera sau khi chờ animation
+                delay(800L) // Đồng bộ với thời gian animation của toggle
+                setupCamera(cameraProvider!!, null, true)
+            }
+        }
+    }
+
     DisposableEffect(Unit) {
         onDispose {
             faceDetector.close()
-            camera?.let { cam ->
-                // Cleanup camera resources
-                val cameraProvider = ProcessCameraProvider.getInstance(context).get()
-                cameraProvider.unbindAll()
-            }
+            cameraProvider?.unbindAll()
         }
     }
 }
