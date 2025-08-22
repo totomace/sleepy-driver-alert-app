@@ -446,7 +446,6 @@ fun SleepyDriverScreen(viewModel: SleepyDriverViewModel = viewModel()) {
                                     if (viewModel.detectionState.value.eyesClosed) Color(0xFFFF1744)
                                     else Color(0xFF4CAF50)
                                 }
-
                                 else -> Color(0xFFE0E0E0)
                             },
                             shape = RoundedCornerShape(toggleSize.second / 2)
@@ -491,7 +490,6 @@ fun SleepyDriverScreen(viewModel: SleepyDriverViewModel = viewModel()) {
                             if (viewModel.detectionState.value.eyesClosed) Color(0xFFFF1744)
                             else Color(0xFF4CAF50)
                         }
-
                         else -> if (viewModel.appSettings.value.nightMode) Color.White else Color(
                             0xFF666666
                         )
@@ -503,18 +501,15 @@ fun SleepyDriverScreen(viewModel: SleepyDriverViewModel = viewModel()) {
                 Text(
                     text = when {
                         viewModel.isToggling.value -> "Vui lòng đợi hệ thống khởi tạo..."
-                        viewModel.isDetectionEnabled.value -> {
+                        viewModel.toggleProgress.value > 0.5f -> {
                             if (!viewModel.hasCameraPermission.value) "Cần quyền truy cập camera"
                             else if (!viewModel.cameraInitialized.value) "Đang chuẩn bị camera..."
                             else "AI đang phân tích khuôn mặt và mắt\nĐộ nhạy: ${(viewModel.appSettings.value.sensitivity * 100).toInt()}%"
                         }
-
                         else -> "Bật chế độ giám sát để bắt đầu"
                     },
                     fontSize = if (isSmallScreen) 12.sp else 14.sp,
-                    color = if (viewModel.appSettings.value.nightMode) Color(0xFFBBBBBB) else Color(
-                        0xFF888888
-                    ),
+                    color = if (viewModel.appSettings.value.nightMode) Color(0xFFBBBBBB) else Color(0xFF888888),
                     textAlign = TextAlign.Center,
                     modifier = Modifier.padding(horizontal = if (isNarrowScreen) 16.dp else 32.dp),
                     lineHeight = if (isSmallScreen) 16.sp else 18.sp
