@@ -446,6 +446,7 @@ fun SleepyDriverScreen(viewModel: SleepyDriverViewModel = viewModel()) {
                                     if (viewModel.detectionState.value.eyesClosed) Color(0xFFFF1744)
                                     else Color(0xFF4CAF50)
                                 }
+
                                 else -> Color(0xFFE0E0E0)
                             },
                             shape = RoundedCornerShape(toggleSize.second / 2)
@@ -475,19 +476,25 @@ fun SleepyDriverScreen(viewModel: SleepyDriverViewModel = viewModel()) {
 
                 Text(
                     text = when {
-                        viewModel.isToggling.value -> if (viewModel.toggleProgress.value > 0.5f) "Đang khởi động..." else "Đang dừng..."
-                        viewModel.toggleProgress.value > 0.5f -> "Đang giám sát"
+                        viewModel.isToggling.value -> {
+                            if (viewModel.isDetectionEnabled.value) "Đang khởi động..." else "Đang dừng..."
+                        }
+
+                        viewModel.isDetectionEnabled.value -> "Đang giám sát"
                         else -> "Tạm dừng"
                     },
                     fontSize = statusFontSize,
                     fontWeight = FontWeight.Medium,
                     color = when {
                         viewModel.isToggling.value -> Color(0xFFF57C00)
-                        viewModel.toggleProgress.value > 0.5f -> {
+                        viewModel.isDetectionEnabled.value -> {
                             if (viewModel.detectionState.value.eyesClosed) Color(0xFFFF1744)
                             else Color(0xFF4CAF50)
                         }
-                        else -> if (viewModel.appSettings.value.nightMode) Color.White else Color(0xFF666666)
+
+                        else -> if (viewModel.appSettings.value.nightMode) Color.White else Color(
+                            0xFF666666
+                        )
                     }
                 )
 
@@ -496,15 +503,18 @@ fun SleepyDriverScreen(viewModel: SleepyDriverViewModel = viewModel()) {
                 Text(
                     text = when {
                         viewModel.isToggling.value -> "Vui lòng đợi hệ thống khởi tạo..."
-                        viewModel.toggleProgress.value > 0.5f -> {
+                        viewModel.isDetectionEnabled.value -> {
                             if (!viewModel.hasCameraPermission.value) "Cần quyền truy cập camera"
                             else if (!viewModel.cameraInitialized.value) "Đang chuẩn bị camera..."
                             else "AI đang phân tích khuôn mặt và mắt\nĐộ nhạy: ${(viewModel.appSettings.value.sensitivity * 100).toInt()}%"
                         }
+
                         else -> "Bật chế độ giám sát để bắt đầu"
                     },
                     fontSize = if (isSmallScreen) 12.sp else 14.sp,
-                    color = if (viewModel.appSettings.value.nightMode) Color(0xFFBBBBBB) else Color(0xFF888888),
+                    color = if (viewModel.appSettings.value.nightMode) Color(0xFFBBBBBB) else Color(
+                        0xFF888888
+                    ),
                     textAlign = TextAlign.Center,
                     modifier = Modifier.padding(horizontal = if (isNarrowScreen) 16.dp else 32.dp),
                     lineHeight = if (isSmallScreen) 16.sp else 18.sp

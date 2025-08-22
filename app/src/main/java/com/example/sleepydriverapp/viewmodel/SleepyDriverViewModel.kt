@@ -47,15 +47,19 @@ class SleepyDriverViewModel : ViewModel() {
         toggleJob?.cancel()
         isToggling.value = true
 
-        if (!isDetectionEnabled.value) {
+        val willTurnOn = !isDetectionEnabled.value // Lưu trạng thái sẽ chuyển đến
+
+        if (willTurnOn) {
             // Turning ON
             if (hasCameraPermission.value) {
+                // Cập nhật trạng thái NGAY khi bắt đầu
+                isDetectionEnabled.value = true
+
                 toggleJob = viewModelScope.launch {
                     // Animate toggle to ON position
                     animateToggle(true)
 
-                    // Enable detection after animation completes
-                    isDetectionEnabled.value = true
+                    // Enable UI components after animation
                     showCamera.value = true
 
                     // Wait for camera initialization
@@ -76,12 +80,14 @@ class SleepyDriverViewModel : ViewModel() {
             }
         } else {
             // Turning OFF
+            // Cập nhật trạng thái NGAY khi bắt đầu
+            isDetectionEnabled.value = false
+
             toggleJob = viewModelScope.launch {
                 // Animate toggle to OFF position
                 animateToggle(false)
 
-                // Disable detection after animation completes
-                isDetectionEnabled.value = false
+                // Disable components after animation
                 showCamera.value = false
                 cameraInitialized.value = false
                 detectionState.value = DetectionState()
@@ -124,6 +130,7 @@ class SleepyDriverViewModel : ViewModel() {
     fun onPermissionResult(isGranted: Boolean, context: Context) {
         hasCameraPermission.value = isGranted
         if (isGranted) {
+            // Chỉ bật khi user thực sự muốn bật (không tự động bật lại)
             if (isDetectionEnabled.value) {
                 viewModelScope.launch {
                     showCamera.value = true
